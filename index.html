@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StringScope - PCS Current Analyzer</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel Standalone (for JSX) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- ExcelJS & FileSaver -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    
+    <!-- Core Logic -->
+    <script src="js/excelProcessor.js"></script>
+
+    <style>
+        /* Custom scrollbar for better look */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const { FileSpreadsheet, CheckCircle, AlertTriangle, Upload, Clock, Download, Loader2 } = lucide;
+
+        // UI Components
+        function Card({ className, children, ...props }) {
+            return (
+                <div className={`rounded-lg border border-slate-200 bg-white text-slate-950 shadow-sm ${className || ''}`} {...props}>
+                    {children}
+                </div>
+            );
+        }
+
+        function CardHeader({ className, children, ...props }) {
+            return (
+                <div className={`flex flex-col space-y-1.5 p-6 ${className || ''}`} {...props}>
+                    {children}
+                </div>
+            );
+        }
+
+        function CardTitle({ className, children, ...props }) {
+            return (
+                <h3 className={`text-2xl font-semibold leading-none tracking-tight ${className || ''}`} {...props}>
+                    {children}
+                </h3>
+            );
+        }
+
+        function CardContent({ className, children, ...props }) {
+            return (
+                <div className={`p-6 pt-0 ${className || ''}`} {...props}>
+                    {children}
+                </div>
+            );
+        }
+
+        function Button({ className, variant = "default", disabled, children, ...props }) {
+            const baseStyles = "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 h-10 px-4 py-2";
+            const variants = {
+                default: "bg-slate-900 text-slate-50 hover:bg-slate-900/90",
+                destructive: "bg-red-500 text-slate-50 hover:bg-red-500/90",
+                outline: "border border-slate-200 bg-white hover:bg-slate-100 hover:text-slate-900",
+                secondary: "bg-slate-100 text-slate-900 hover:bg-slate-100/80",
+                ghost: "hover:bg-slate-100 hover:text-slate-900",
+                link: "text-slate-900 underline-offset-4 hover:underline",
+            };
+            
+            return (
+                <button
+                    className={`${baseStyles} ${variants[variant]} ${className || ''}`}
+                    disabled={disabled}
+                    {...props}
+                >
+                    {children}
+                </button>
+            );
+        }
+
+        function App() {
+            const [masterData, setMasterData] = useState(null);
+            const [isLoadingMaster, setIsLoadingMaster] = useState(true);
+            const [masterError, setMasterError] = useState(null);
+
+            const [timeRange, setTimeRange] = useState({ start: '09:00', end: '18:00' });
+            const [files, setFiles] = useState([]);
+            const [outputDebug, setOutputDebug] = useState(false);
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [progress, setProgress] = useState(null);
+            const [result, setResult] = useState(null);
+            const [error, setError] = useState(null);
+
+            const fileInputRef = useRef(null);
+
+            useEffect(() => {
+                // Initialize Lucide icons
+                lucide.createIcons();
+                
+                fetch('public/data.json')
+                    .then(res => {
+                        if (!res.ok) throw new Error('マスタファイルが見つかりません');
+                        return res.json();
+                    })
+                    .then(data => {
+                        setMasterData(data);
+                        setIsLoadingMaster(false);
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        setMasterError(err.message);
+                        setIsLoadingMaster(false);
+                    });
+            }, []);
+
+            // Re-render icons on updates
+            useEffect(() => {
+                lucide.createIcons();
+            });
+
+            const handleFileChange = (e) => {
+                if (e.target.files) {
+                    setFiles(Array.from(e.target.files));
+                    setResult(null); 
+                    setError(null);
+                }
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                if (e.dataTransfer.files) {
+                    const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.xlsx'));
+                    if (droppedFiles.length > 0) {
+                        setFiles(droppedFiles);
+                        setResult(null);
+                        setError(null);
+                    }
+                }
+            };
+
+            const handleRun = async () => {
+                if (!masterData) return;
+                setIsProcessing(true);
+                setProgress({ phase: 'init', message: '処理を開始します...' });
+                setError(null);
+
+                try {
+                    // Call the global function loaded from js/excelProcessor.js
+                    const { buffer, stats, unknownPCSList } = await window.processFiles(
+                        files, 
+                        timeRange, 
+                        masterData, 
+                        (p) => {
+                            let msg = '';
+                            if (p.phase === 'reading') msg = `ファイル読込中 (${p.current}/${p.total}): ${p.filename}`;
+                            if (p.phase === 'processing') msg = `データ解析中... 行: ${p.current}`;
+                            setProgress({ ...p, message: msg });
+                        },
+                        { outputDebug }
+                    );
+
+                    setResult({ buffer, stats, unknownPCSList });
+                } catch (err) {
+                    console.error(err);
+                    setError(err.message || '予期せぬエラーが発生しました');
+                } finally {
+                    setIsProcessing(false);
+                    setProgress(null);
+                }
+            };
+
+            const downloadResult = () => {
+                if (!result) return;
+                const now = new Date();
+                const dateStr = now.toISOString().slice(0,10).replace(/-/g, '');
+                const timeStr = timeRange.start.replace(':','') + '-' + timeRange.end.replace(':','');
+                const fileName = `merged_0A_highlight_${dateStr}_${timeStr}.xlsx`;
+                
+                const blob = new Blob([result.buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                saveAs(blob, fileName);
+            };
+
+            return (
+                <div className="min-h-screen pb-10">
+                    {/* Header */}
+                    <header className="bg-slate-900 text-white p-4 shadow-md">
+                        <div className="container mx-auto flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <i data-lucide="file-spreadsheet" className="h-6 w-6 text-blue-400"></i>
+                                <div>
+                                    <h1 className="text-xl font-bold tracking-tight">StringScope</h1>
+                                    <p className="text-xs text-slate-400">PCS Current Zero-Amp Detection</p>
+                                </div>
+                            </div>
+                            <div className="text-right text-xs text-slate-400 leading-tight">
+                                <p>Ver 1.0.0</p>
+                                <p>Last Update: 2025-12-16</p>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="container mx-auto p-4 space-y-6 max-w-3xl">
+                        
+                        {/* Status Messages */}
+                        {isLoadingMaster && (
+                            <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded text-blue-700 flex items-center">
+                                <i data-lucide="loader-2" className="animate-spin mr-2 h-5 w-5"></i>
+                                PCSマスタデータを読み込み中...
+                            </div>
+                        )}
+                        {masterError && (
+                            <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded text-red-700 flex items-center">
+                                <i data-lucide="alert-triangle" className="mr-2 h-5 w-5"></i>
+                                <div>
+                                    <p className="font-bold">マスタ読込エラー</p>
+                                    <p>{masterError}</p>
+                                    <p className="text-sm mt-1">public/data.json が存在するか確認してください。</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Input Card */}
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-lg flex items-center gap-2">
+                                    <i data-lucide="check-circle" className="h-5 w-5 text-green-600"></i>
+                                    解析条件設定
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-6">
+                                
+                                {/* Time Range */}
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-slate-700 flex items-center gap-1">
+                                        <i data-lucide="clock" className="h-4 w-4"></i> 判定時間帯 (開始 - 終了)
+                                    </label>
+                                    <div className="flex items-center gap-4">
+                                        <input 
+                                            type="time" 
+                                            className="border border-slate-300 rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            value={timeRange.start}
+                                            onChange={e => setTimeRange({...timeRange, start: e.target.value})}
+                                        />
+                                        <span className="text-slate-400">～</span>
+                                        <input 
+                                            type="time" 
+                                            className="border border-slate-300 rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            value={timeRange.end}
+                                            onChange={e => setTimeRange({...timeRange, end: e.target.value})}
+                                        />
+                                    </div>
+                                    <p className="text-xs text-slate-500">
+                                        ※この時間帯に含まれるデータのみ0Aチェックを行います。終了時間が開始時間より前の場合、日跨ぎとみなします。
+                                    </p>
+                                    
+                                    <div className="flex items-center mt-3 space-x-2 p-2 bg-slate-100 rounded border border-slate-200">
+                                        <input 
+                                            type="checkbox" 
+                                            id="output-debug"
+                                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                            checked={outputDebug}
+                                            onChange={e => setOutputDebug(e.target.checked)}
+                                        />
+                                        <label htmlFor="output-debug" className="text-sm text-slate-700 cursor-pointer select-none font-medium">
+                                            検証用データを出力 (M列に回路数)
+                                            <span className="block text-xs text-slate-500 font-normal mt-0.5">※チェックを入れると、ExcelのM列に判定に使用した回路数(7 or 8)を出力します。</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                {/* File Upload */}
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-slate-700 flex items-center gap-1">
+                                        <i data-lucide="upload" className="h-4 w-4"></i> ログファイル (Excel .xlsx)
+                                    </label>
+                                    
+                                    <div 
+                                        className="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center hover:bg-slate-50 transition-colors cursor-pointer"
+                                        onDragOver={e => e.preventDefault()}
+                                        onDrop={handleDrop}
+                                        onClick={() => fileInputRef.current?.click()}
+                                    >
+                                        <input 
+                                            type="file" 
+                                            multiple 
+                                            accept=".xlsx" 
+                                            className="hidden" 
+                                            ref={fileInputRef}
+                                            onChange={handleFileChange}
+                                        />
+                                        <i data-lucide="file-spreadsheet" className="h-10 w-10 text-slate-400 mx-auto mb-2"></i>
+                                        <p className="text-slate-600 font-medium">クリックしてファイルを選択</p>
+                                        <p className="text-sm text-slate-400 mt-1">またはここにドラッグ＆ドロップ</p>
+                                    </div>
+
+                                    {files.length > 0 && (
+                                        <div className="bg-slate-100 p-3 rounded text-sm text-slate-700">
+                                            <strong>{files.length}</strong> ファイル選択中:
+                                            <ul className="list-disc list-inside mt-1 pl-2 text-xs text-slate-500 max-h-24 overflow-y-auto">
+                                                {files.map((f, i) => <li key={i}>{f.name} ({Math.round(f.size/1024)} KB)</li>)}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <Button 
+                                    className="w-full h-12 text-lg" 
+                                    disabled={!masterData || files.length === 0 || isProcessing}
+                                    onClick={handleRun}
+                                >
+                                    {isProcessing ? (
+                                        <span className="flex items-center gap-2">
+                                            <i data-lucide="loader-2" className="animate-spin h-5 w-5"></i> 処理中...
+                                        </span>
+                                    ) : '実行する'}
+                                </Button>
+
+                                {isProcessing && progress && (
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-slate-500">
+                                            <span>{progress.message}</span>
+                                        </div>
+                                        <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                                            <div className="h-full bg-blue-500 animate-pulse w-full"></div>
+                                        </div>
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+
+                        {/* Error Display */}
+                        {error && (
+                            <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex items-start gap-3">
+                                <i data-lucide="alert-triangle" className="h-5 w-5 mt-0.5 flex-shrink-0"></i>
+                                <div>
+                                    <h4 className="font-bold">エラーが発生しました</h4>
+                                    <p>{error}</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Result Card */}
+                        {result && (
+                            <Card className="border-green-200 bg-green-50/50">
+                                <CardHeader>
+                                    <CardTitle className="text-green-800 flex items-center gap-2">
+                                        <i data-lucide="check-circle" className="h-6 w-6"></i> 処理完了
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    <div className="grid grid-cols-2 gap-4 text-sm bg-white p-4 rounded border border-green-100">
+                                        <div>
+                                            <span className="text-slate-500 block">処理ファイル数</span>
+                                            <span className="font-bold text-lg">{result.stats.filesProcessed}</span>
+                                        </div>
+                                        <div>
+                                            <span className="text-slate-500 block">出力行数</span>
+                                            <span className="font-bold text-lg">{result.stats.totalRows}</span>
+                                        </div>
+                                        <div>
+                                            <span className="text-slate-500 block">判定対象行数</span>
+                                            <span className="font-bold text-lg">{result.stats.targetRows}</span>
+                                        </div>
+                                        <div>
+                                            <span className="text-slate-500 block">赤ハイライト(0A)</span>
+                                            <span className="font-bold text-lg text-red-600">{result.stats.highlightedCells} <span className="text-xs font-normal text-slate-400">セル</span></span>
+                                        </div>
+                                    </div>
+
+                                    {result.unknownPCSList.length > 0 && (
+                                        <div className="bg-yellow-50 border border-yellow-200 p-3 rounded text-sm text-yellow-800">
+                                            <strong className="flex items-center gap-1">
+                                                <i data-lucide="alert-triangle" className="h-4 w-4"></i>
+                                                マスタ未登録のPCS ({result.stats.unknownPCS}件)
+                                            </strong>
+                                            <p className="text-xs mt-1 text-yellow-700">以下のPCSは回路数が不明なため、全PV(1-8)をチェックしました:</p>
+                                            <ul className="list-disc list-inside mt-1 text-xs max-h-20 overflow-y-auto">
+                                                {result.unknownPCSList.map(pcs => <li key={pcs}>{pcs}</li>)}
+                                            </ul>
+                                        </div>
+                                    )}
+
+                                    <Button 
+                                        onClick={downloadResult} 
+                                        className="w-full h-14 text-lg bg-green-600 hover:bg-green-700 shadow-lg shadow-green-200"
+                                    >
+                                        <i data-lucide="download" className="mr-2 h-6 w-6"></i> 結果ファイルをダウンロード
+                                    </Button>
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Note */}
+                        <div className="mt-8 text-center text-xs text-slate-500">
+                            <p>備考：和気ソーラーパーク向けのWEBアプリのため、他発電所のデータ入力（解析）には使えません。</p>
+                        </div>
+
+                    </main>
+
+                    <footer className="text-center text-slate-400 text-sm mt-10">
+                        <p>StringScope v1.0.0</p>
+                    </footer>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
